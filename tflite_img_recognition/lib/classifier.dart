@@ -44,9 +44,9 @@ class Classifier {
           await Interpreter.fromAsset(_modelName, options: _interpreterOptions);
 
       _inputShape = _interpreter.getInputTensor(0).shape;
-      _inputType = _interpreter.getInputTensor(0).type;
+      _inputType = _interpreter.getInputTensor(0).type as TfLiteType;
       _outputShape = _interpreter.getOutputTensor(0).shape;
-      _outputType = _interpreter.getOutputTensor(0).type;
+      _outputType = _interpreter.getOutputTensor(0).type as TfLiteType;
 
       _outputBuffer = TensorBuffer.createFixedSize(_outputShape, _outputType);
       print('Successfully model file is loaded.');
