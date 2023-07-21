@@ -1,123 +1,223 @@
-import 'dart:io';
+import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:image/image.dart' as img;
-import 'package:image_picker/image_picker.dart';
-import 'package:logger/logger.dart';
-import 'package:tflite_flutter_helper/tflite_flutter_helper.dart';
+import 'package:flutter/services.dart';
+import 'package:oktoast/oktoast.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:provider/provider.dart';
 
-import 'classifier.dart';
-import 'classifier_quant.dart';
+import 'model/photo_provider.dart';
+// import 'page/index_page.dart';
+import 'widget/image_item_widget.dart';
 
-void main() => runApp(const MyApp());
+final PhotoProvider provider = PhotoProvider();
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+void main() {
+  runZonedGuarded(
+        () => runApp(const _SimpleExampleApp()),
+        (Object e, StackTrace s) {
+      if (kDebugMode) {
+        FlutterError.reportError(FlutterErrorDetails(exception: e, stack: s));
+      }
+      showToast('$e\n$s', textAlign: TextAlign.start);
+    },
+  );
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+    ),
+  );
+}
+
+class _SimpleExampleApp extends StatelessWidget {
+  const _SimpleExampleApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Image Classification',
-      theme: ThemeData(
-        primarySwatch: Colors.orange,
+    return ChangeNotifierProvider<PhotoProvider>.value(
+      value: provider, // This is for the advanced usages.
+      child: MaterialApp(
+        title: 'Photo Manager Example',
+        builder: (context, child) {
+          if (child == null) return const SizedBox.shrink();
+          return Banner(
+            message: 'Debug',
+            location: BannerLocation.bottomStart,
+            child: OKToast(child: child),
+          );
+        },
+        home: const _SimpleExamplePage(),
+        debugShowCheckedModeBanner: false,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({Key? key, this.title}) : super(key: key);
-
-  final String? title;
+class _SimpleExamplePage extends StatefulWidget {
+  const _SimpleExamplePage({Key? key}) : super(key: key);
 
   @override
-  _MyHomePageState createState() => _MyHomePageState();
+  _SimpleExamplePageState createState() => _SimpleExamplePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  late Classifier _classifier;
+class _SimpleExamplePageState extends State<_SimpleExamplePage> {
+  /// Customize your own filter options.
+  final FilterOptionGroup _filterOptionGroup = FilterOptionGroup(
+    imageOption: const FilterOption(
+      sizeConstraint: SizeConstraint(ignoreSize: true),
+    ),
+  );
+  final int _sizePerPage = 50;
 
-  var logger = Logger();
+  AssetPathEntity? _path;
+  List<AssetEntity>? _entities;
+  int _totalEntitiesCount = 0;
 
-  File? _image;
-  final picker = ImagePicker();
+  int _page = 0;
+  bool _isLoading = false;
+  bool _isLoadingMore = false;
+  bool _hasMoreToLoad = true;
 
-  Image? _imageWidget;
-
-  img.Image? fox;
-
-  Category? category;
-
-  @override
-  void initState() {
-    super.initState();
-    _classifier = ClassifierQuant();
-  }
-
-  Future getImage() async {
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-
+  Future<void> _requestAssets() async {
     setState(() {
-      _image = File(pickedFile!.path);
-      _imageWidget = Image.file(_image!);
-
-      _predict();
+      _isLoading = true;
+    });
+    // Request permissions.
+    final PermissionState ps = await PhotoManager.requestPermissionExtend();
+    if (!mounted) {
+      return;
+    }
+    // Further requests can be only proceed with authorized or limited.
+    if (!ps.hasAccess) {
+      setState(() {
+        _isLoading = false;
+      });
+      showToast('Permission is not accessible.');
+      return;
+    }
+    // Obtain assets using the path entity.
+    final List<AssetPathEntity> paths = await PhotoManager.getAssetPathList(
+      onlyAll: true,
+      filterOption: _filterOptionGroup,
+    );
+    if (!mounted) {
+      return;
+    }
+    // Return if not paths found.
+    if (paths.isEmpty) {
+      setState(() {
+        _isLoading = false;
+      });
+      showToast('No paths found.');
+      return;
+    }
+    setState(() {
+      _path = paths.first;
+    });
+    _totalEntitiesCount = await _path!.assetCountAsync;
+    final List<AssetEntity> entities = await _path!.getAssetListPaged(
+      page: 0,
+      size: _sizePerPage,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _entities = entities;
+      _isLoading = false;
+      _hasMoreToLoad = _entities!.length < _totalEntitiesCount;
     });
   }
 
-  void _predict() async {
-    img.Image imageInput = img.decodeImage(_image!.readAsBytesSync())!;
-    var pred = _classifier.predict(imageInput);
-
+  Future<void> _loadMoreAsset() async {
+    final List<AssetEntity> entities = await _path!.getAssetListPaged(
+      page: _page + 1,
+      size: _sizePerPage,
+    );
+    if (!mounted) {
+      return;
+    }
     setState(() {
-      category = pred;
+      _entities!.addAll(entities);
+      _page++;
+      _hasMoreToLoad = _entities!.length < _totalEntitiesCount;
+      _isLoadingMore = false;
     });
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator.adaptive());
+    }
+    if (_path == null) {
+      return const Center(child: Text('Request paths first.'));
+    }
+    if (_entities?.isNotEmpty != true) {
+      return const Center(child: Text('No assets found on this device.'));
+    }
+    return GridView.custom(
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+      ),
+      childrenDelegate: SliverChildBuilderDelegate(
+            (BuildContext context, int index) {
+          if (index == _entities!.length - 8 &&
+              !_isLoadingMore &&
+              _hasMoreToLoad) {
+            _loadMoreAsset();
+          }
+          final AssetEntity entity = _entities![index];
+          return ImageItemWidget(
+            key: ValueKey<int>(index),
+            entity: entity,
+            option: const ThumbnailOption(size: ThumbnailSize.square(200)),
+          );
+        },
+        childCount: _entities!.length,
+        findChildIndexCallback: (Key key) {
+          // Re-use elements.
+          if (key is ValueKey<int>) {
+            return key.value;
+          }
+          return null;
+        },
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('TfLite Flutter Helper',
-            style: TextStyle(color: Colors.white)),
-      ),
+      appBar: AppBar(title: const Text('photo_manager')),
       body: Column(
         children: <Widget>[
-          Center(
-            child: _image == null
-                ? const Text('No image selected')
-                : Container(
-                    constraints: BoxConstraints(
-                        maxHeight: MediaQuery.of(context).size.height / 2),
-                    decoration: BoxDecoration(
-                      border: Border.all(),
-                    ),
-                    child: _imageWidget,
-                  ),
+          const Padding(
+            padding: EdgeInsets.all(8.0),
+            child: Text(
+              'This page will only obtain the first page of assets '
+                  'under the primary album (a.k.a. Recent). '
+                  'If you want more filtering assets, '
+                  'head over to "Advanced usages".',
+            ),
           ),
-          const SizedBox(
-            height: 36,
-          ),
-          Text(
-            category != null ? category!.label : '',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(
-            height: 8,
-          ),
-          Text(
-            category != null
-                ? 'Confidence: ${category!.score.toStringAsFixed(3)}'
-                : '',
-            style: const TextStyle(fontSize: 16),
-          ),
+          Expanded(child: _buildBody(context)),
         ],
       ),
+      // persistentFooterButtons: <TextButton>[
+      //   TextButton(
+      //     onPressed: () {
+      //       Navigator.of(context).push<void>(
+      //         MaterialPageRoute<void>(builder: (_) => const IndexPage()),
+      //       );
+      //     },
+      //     child: const Text('Advanced usages'),
+      //   ),
+      // ],
       floatingActionButton: FloatingActionButton(
-        onPressed: getImage,
-        tooltip: 'Pick Image',
-        child: const Icon(Icons.add_a_photo),
+        onPressed: _requestAssets,
+        child: const Icon(Icons.developer_board),
       ),
     );
   }
