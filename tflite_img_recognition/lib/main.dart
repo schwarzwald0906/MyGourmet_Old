@@ -6,13 +6,62 @@ import 'package:flutter/services.dart';
 import 'package:oktoast/oktoast.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
+import 'package:image/image.dart' as img;
 
+import 'classifier.dart';
+import 'classifier_quant.dart';
 import 'model/photo_provider.dart';
 // import 'page/index_page.dart';
 import 'widget/image_item_widget.dart';
 
 final PhotoProvider provider = PhotoProvider();
-
+final Set<String> validLabels = {
+  'guacamole',
+  'consomme',
+  'hot pot',
+  'trifle',
+  'ice cream',
+  'ice lolly',
+  'French loaf',
+  'bagel',
+  'pretzel',
+  'cheeseburger',
+  'hotdog',
+  'mashed potato',
+  'head cabbage',
+  'broccoli',
+  'cauliflower',
+  'zucchini',
+  'spaghetti squash',
+  'acorn squash',
+  'butternut squash',
+  'cucumber',
+  'artichoke',
+  'bell pepper',
+  'cardoon',
+  'mushroom',
+  'Granny Smith',
+  'strawberry',
+  'orange',
+  'lemon',
+  'fig',
+  'pineapple',
+  'banana',
+  'jackfruit',
+  'custard apple',
+  'pomegranate',
+  'red wine',
+  'espresso',
+  'cup',
+  'eggnog',
+  'carbonara',
+  'chocolate sauce',
+  'dough',
+  'meat loaf',
+  'pizza',
+  'potpie',
+  'burrito',
+};
 void main() {
   runZonedGuarded(
         () => runApp(const _SimpleExampleApp()),
@@ -79,6 +128,10 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
   bool _isLoading = false;
   bool _isLoadingMore = false;
   bool _hasMoreToLoad = true;
+  late Classifier _classifier;
+  // File? _image;
+  // Image? _imageWidget;
+  img.Image? fox;
 
   Future<void> _requestAssets() async {
     setState(() {
@@ -117,15 +170,39 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
       _path = paths.first;
     });
     _totalEntitiesCount = await _path!.assetCountAsync;
+
     final List<AssetEntity> entities = await _path!.getAssetListPaged(
       page: 0,
       size: _sizePerPage,
     );
+
+
     if (!mounted) {
       return;
     }
+
+    //コード追加箇所
+    List<AssetEntity> validEntities = [];
+    // setState(() {
+    //   _image = File(pickedFile!.path);
+    // });
+
+    for (var entity in entities) {
+      var originBytes = await entity.originBytes;
+      if (originBytes != null) {
+        img.Image? imageInput = img.decodeImage(originBytes);
+        if (imageInput != null) {
+          var pred = _classifier.predict(imageInput);
+          if (validLabels.contains(pred.label)) {
+            validEntities.add(entity);
+          }
+        }
+      }
+    }
+    //コード追加箇所
+
     setState(() {
-      _entities = entities;
+      _entities = validEntities;
       _isLoading = false;
       _hasMoreToLoad = _entities!.length < _totalEntitiesCount;
     });
@@ -185,6 +262,12 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
         },
       ),
     );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _classifier = ClassifierQuant();
   }
 
   @override
