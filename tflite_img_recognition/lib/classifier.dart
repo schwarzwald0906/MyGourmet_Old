@@ -75,10 +75,13 @@ abstract class Classifier {
 
   TensorImage _preProcess() {
     int cropSize = min(_inputImage.height, _inputImage.width);
+    // Adding ResizeOp
+    int targetSize =
+        224; // You may adjust this value depending on your model's input size requirement.
     return ImageProcessorBuilder()
         .add(ResizeWithCropOrPadOp(cropSize, cropSize))
-        .add(ResizeOp(
-            _inputShape[1], _inputShape[2], ResizeMethod.NEAREST_NEIGHBOUR))
+        .add(ResizeOp(targetSize, targetSize,
+            ResizeMethod.NEAREST_NEIGHBOUR)) // Resize to smaller size
         .add(preProcessNormalizeOp)
         .build()
         .process(_inputImage);

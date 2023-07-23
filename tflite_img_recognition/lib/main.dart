@@ -64,8 +64,8 @@ final Set<String> validLabels = {
 };
 void main() {
   runZonedGuarded(
-        () => runApp(const _SimpleExampleApp()),
-        (Object e, StackTrace s) {
+    () => runApp(const _SimpleExampleApp()),
+    (Object e, StackTrace s) {
       if (kDebugMode) {
         FlutterError.reportError(FlutterErrorDetails(exception: e, stack: s));
       }
@@ -132,6 +132,47 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
   // File? _image;
   // Image? _imageWidget;
   img.Image? fox;
+  List<List<AssetEntity>> batchify(List<AssetEntity> list, int batchSize) {
+    int len = list.length;
+    List<List<AssetEntity>> batches = [];
+
+    for (int i = 0; i < len; i += batchSize) {
+      int end = (i+batchSize < len) ? i+batchSize : len;
+      batches.add(list.sublist(i, end));
+    }
+
+    return batches;
+  }
+
+  Future<List<AssetEntity>> processEntities(List<AssetEntity> entities) async {
+    List<AssetEntity> validEntities = [];
+    List<List<AssetEntity>> batches = batchify(entities, 100);
+
+    for (List<AssetEntity> batch in batches) {
+      // List to hold all the futures
+      List<Future<void>> futures = [];
+
+      for (AssetEntity entity in batch) {
+        // Add each process to the futures list
+        futures.add(() async {
+          var originBytes = await entity.originBytes;
+          if (originBytes != null) {
+            img.Image? imageInput = img.decodeImage(originBytes);
+            if (imageInput != null) {
+              var pred = _classifier.predict(imageInput);
+              if (validLabels.contains(pred.label)) {
+                validEntities.add(entity);
+              }
+            }
+          }
+        }());
+      }
+
+      // Wait for all the processes to finish
+      await Future.wait(futures);
+    }
+    return validEntities;
+  }
 
   Future<void> _requestAssets() async {
     setState(() {
@@ -176,30 +217,11 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
       size: _sizePerPage,
     );
 
-
     if (!mounted) {
       return;
     }
 
-    //コード追加箇所
-    List<AssetEntity> validEntities = [];
-    // setState(() {
-    //   _image = File(pickedFile!.path);
-    // });
-
-    for (var entity in entities) {
-      var originBytes = await entity.originBytes;
-      if (originBytes != null) {
-        img.Image? imageInput = img.decodeImage(originBytes);
-        if (imageInput != null) {
-          var pred = _classifier.predict(imageInput);
-          if (validLabels.contains(pred.label)) {
-            validEntities.add(entity);
-          }
-        }
-      }
-    }
-    //コード追加箇所
+    List<AssetEntity> validEntities = await processEntities(entities);
 
     setState(() {
       _entities = validEntities;
@@ -239,7 +261,7 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
         crossAxisCount: 3,
       ),
       childrenDelegate: SliverChildBuilderDelegate(
-            (BuildContext context, int index) {
+        (BuildContext context, int index) {
           if (index == _entities!.length - 8 &&
               !_isLoadingMore &&
               _hasMoreToLoad) {
@@ -280,9 +302,9 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
             padding: EdgeInsets.all(8.0),
             child: Text(
               'This page will only obtain the first page of assets '
-                  'under the primary album (a.k.a. Recent). '
-                  'If you want more filtering assets, '
-                  'head over to "Advanced usages".',
+              'under the primary album (a.k.a. Recent). '
+              'If you want more filtering assets, '
+              'head over to "Advanced usages".',
             ),
           ),
           Expanded(child: _buildBody(context)),
