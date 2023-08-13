@@ -60,25 +60,22 @@ app = initialize_app()
 #     event.data.reference.update({"uppercase": upper})
 
 
-@https_fn.on_request()
-def get_and_save_photos(req: https_fn.Request) -> https_fn.Response:
-    import requests, os, json
+def get_classify_and_save_photos(req: https_fn.Request) -> https_fn.Response:
+    import requests, os, json, tempfile
+    import tensorflow as tf
+    import numpy as np
+    from tensorflow.keras.preprocessing.image import load_img, img_to_array
+    from google.cloud import storage
 
     # Google Cloud Storage client
     storage_client = storage.Client()
-
-    # The name for the new bucket
-    # bucket_name = "my-gourmet-image-classification-training-2023-07"
     bucket_name = "my-gourmet-image-classification-training-2023-08"
-
-    # Get the bucket
     bucket = storage_client.bucket(bucket_name)
 
-    # Load the client secrets
+    # Authentication and get photos
     with open("credentials.json") as f:
         client_secrets = json.load(f)["installed"]
 
-    # Load the refresh token
     with open("refresh_token.json") as f:
         refresh_info = json.load(f)
 
@@ -92,104 +89,78 @@ def get_and_save_photos(req: https_fn.Request) -> https_fn.Response:
     token = requests.post(
         "https://www.googleapis.com/oauth2/v4/token", data=data
     ).json()
-    response = requests.get(
-        "https://photoslibrary.googleapis.com/v1/mediaItems?pageSize=10",
+
+    search_request_data = {"pageSize": 100}
+    response = requests.post(
+        "https://photoslibrary.googleapis.com/v1/mediaItems:search",
         headers={"Authorization": "Bearer %s" % token["access_token"]},
+        json=search_request_data,
     )
 
     photos = response.json()
+    # print("Google Photos API response:", photos)
 
-    for photo in photos["mediaItems"]:
-        if photo["mimeType"] == "image/jpeg":
-            # Get the url of the photo
-            url = photo["baseUrl"]
-
-            # Get the photo data
-            response = requests.get(url)
-
-            # Check if the request is successful
-            if response.status_code == 200:
-                # Get the file name from the photo metadata
-                file_name = photo["filename"]
-
-                # Create a blob
-                blob = bucket.blob(file_name)
-
-                # Upload the photo data to Cloud Storage
-                blob.upload_from_string(response.content)
-
-    return https_fn.Response("Photos downloaded successfully.")
-
-
-@https_fn.on_request()
-def classify_image(req: https_fn.Request) -> https_fn.Response:
-    # Define image size
-    image_size = 50
-
-    # Initialize a Cloud Storage client
-    storage_client = storage.Client()
-
-    # Define the bucket name
+    # Image classification setup
+    image_size = 224
     model_bucket_name = "tflite-my-gourmet-image-classification-training-2023-07"
-    image_bucket_name = "my-gourmet-image-classification-training-2023-08"
-
-    # Get the bucket for model
     model_bucket = storage_client.bucket(model_bucket_name)
-    # Download the model to a temporary file
+
     _, model_local_path = tempfile.mkstemp()
     blob_model = model_bucket.blob("gourmet_cnn_vgg_final.tflite")
     blob_model.download_to_filename(model_local_path)
 
-    # Initialize the model
     interpreter = tf.lite.Interpreter(model_path=model_local_path)
     interpreter.allocate_tensors()
-
-    # Get input and output details
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    # Get the bucket for images
-    image_bucket = storage_client.bucket(image_bucket_name)
-    # Get the list of blobs in the bucket
-    blobs = image_bucket.list_blobs()
+    classes = ["ramen", "japanese_food", "international_cuisine", "cafe", "other"]
 
-    # Prepare an empty list to store classification results
-    results = []
+    for photo in photos["mediaItems"]:
+        if photo["mimeType"] == "image/jpeg":
+            url = photo["baseUrl"]
+            response = requests.get(url)
 
-    # Classify each image in the bucket
-    for blob in blobs:
-        # Download the blob to a temporary file
-        _, temp_local_path = tempfile.mkstemp()
-        blob.download_to_filename(temp_local_path)
+            if response.status_code == 200:
+                # Image classification
+                _, temp_local_path = tempfile.mkstemp()
+                with open(temp_local_path, "wb") as f:
+                    f.write(response.content)
 
-        # Load the image file
-        img = load_img(temp_local_path, target_size=(image_size, image_size))
+                img = load_img(temp_local_path, target_size=(image_size, image_size))
+                x = img_to_array(img)
+                x /= 255.0
+                x = np.expand_dims(x, axis=0)
 
-        # Convert the image to an array
-        x = img_to_array(img)
-        x /= 255.0  # Normalize the image if necessary
-        x = np.expand_dims(x, axis=0)
+                interpreter.set_tensor(input_details[0]["index"], x)
+                interpreter.invoke()
 
-        # Classify the image
-        classes = ["ramen", "japanese_food", "international_cuisine", "cafe", "other"]
+                result = interpreter.get_tensor(output_details[0]["index"])
+                predicted = result.argmax()
 
-        # Preprocess and feed the data to the interpreter
-        interpreter.set_tensor(input_details[0]["index"], x)
-        interpreter.invoke()
+                os.remove(temp_local_path)
 
-        # Get the prediction result
-        result = interpreter.get_tensor(output_details[0]["index"])
-        predicted = result.argmax()
-        percentage = int(result[0][predicted] * 100)
+                # Save image to Cloud Storage if it belongs to specified classes
+                if classes[predicted] in [
+                    "ramen",
+                    "japanese_food",
+                    "international_cuisine",
+                    "cafe",
+                ]:
+                    file_name = photo["filename"]
+                    blob = bucket.blob(file_name)
+                    blob.upload_from_string(response.content)
 
-        # Append the result to the list
-        results.append((classes[predicted], percentage))
-
-        # Remove the temporary file for the image
-        os.remove(temp_local_path)
-
-    # Remove the temporary file for the model
     os.remove(model_local_path)
+    return https_fn.Response("Processed and saved photos successfully.")
 
-    # Return the classification results
-    return https_fn.Response(str(results))
+
+if __name__ == "__main__":
+    # ここでは適当なリクエストオブジェクトをシミュレートします。
+    # 必要に応じてリクエストオブジェクトをカスタマイズしてください。
+    class DummyRequest:
+        pass
+
+    request = DummyRequest()
+    response = get_classify_and_save_photos(request)
+    print(response)
