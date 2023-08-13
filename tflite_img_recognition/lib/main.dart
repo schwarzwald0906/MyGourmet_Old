@@ -146,7 +146,7 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
 
   Future<List<AssetEntity>> processEntities(List<AssetEntity> entities) async {
     List<AssetEntity> validEntities = [];
-    List<List<AssetEntity>> batches = batchify(entities, 100);
+    List<List<AssetEntity>> batches = batchify(entities, 50);
 
     for (List<AssetEntity> batch in batches) {
       // List to hold all the futures
@@ -225,6 +225,7 @@ class _SimpleExamplePageState extends State<_SimpleExamplePage> {
 
     setState(() {
       _entities = validEntities;
+      // _entities = entities;
       _isLoading = false;
       _hasMoreToLoad = _entities!.length < _totalEntitiesCount;
     });
